@@ -56,12 +56,40 @@ function infer_type_assignment_rhs(binding, state, scope)
             if isidentifier(callname)
                 resolve_ref(callname, scope, state)
                 if hasref(callname)
-                    rb = get_root_method(refof(callname), state.server)
+                    func_ref = refof(callname)
+                    rb = get_root_method(func_ref, state.server)
+
+                    # Check for constructor calls first
                     if (rb isa Binding && (CoreTypes.isdatatype(rb.type) || rb.val isa SymbolServer.DataTypeStore)) || rb isa SymbolServer.DataTypeStore
+                        # Constructor call
                         if is_destructuring
                             infer_destructuring_type(binding, rb)
                         else
                             settype!(binding, rb)
+                        end
+                    elseif func_ref isa Binding && func_ref.val isa EXPR && CSTParser.defines_function(func_ref.val)
+                        # Check for regular function calls with return type annotations
+                        sig = CSTParser.get_sig(func_ref.val)
+                        if CSTParser.isdeclaration(sig) && length(sig.args) > 1
+                            # Function has explicit return type annotation
+                            return_type_expr = sig.args[2]
+                            resolve_ref(return_type_expr, scope, state)
+                            return_type_ref = refof(return_type_expr)
+                            if return_type_ref !== nothing
+                                settype!(binding, return_type_ref)
+                            end
+                        end
+                        # Handle SymbolServer function with return type information
+                    elseif func_ref isa SymbolServer.FunctionStore
+                        if !isempty(func_ref.methods)
+                            first_method = first(func_ref.methods)
+                            if hasfield(typeof(first_method), :rt) && first_method.rt !== nothing
+                                if first_method.rt isa SymbolServer.FakeTypeName
+                                    settype!(binding, maybe_lookup(first_method.rt.name, state))
+                                else
+                                    settype!(binding, first_method.rt)
+                                end
+                            end
                         end
                     end
                 end
@@ -216,15 +244,15 @@ function check_ref_against_calls(x, visitedmethods, new_possibles, env::External
                 if method isa EXPR
                     if defines_function(method)
                         get_arg_type_at_position(method, argi, new_possibles)
-                    # elseif CSTParser.defines_struct(method)
+                        # elseif CSTParser.defines_struct(method)
                         # Can we ignore this? Default constructor gives us no type info?
                     end
                 else # elseif what?
-                    iterate_over_ss_methods(method, tls, env, m -> (get_arg_type_at_position(m, argi, new_possibles);false))
+                    iterate_over_ss_methods(method, tls, env, m -> (get_arg_type_at_position(m, argi, new_possibles); false))
                 end
             end
         else
-            iterate_over_ss_methods(func, tls, env, m -> (get_arg_type_at_position(m, argi, new_possibles);false))
+            iterate_over_ss_methods(func, tls, env, m -> (get_arg_type_at_position(m, argi, new_possibles); false))
         end
     end
 end
@@ -246,8 +274,8 @@ end
 
 function is_arg_of_resolved_call(x::EXPR)
     parentof(x) isa EXPR && headof(parentof(x)) === :call && # check we're in a call signature
-    (caller = parentof(x).args[1]) !== x && # and that x is not the caller
-    ((CSTParser.isidentifier(caller) && hasref(caller)) || (is_getfield(caller) && headof(caller.args[2]) === :quotenode && hasref(caller.args[2].args[1])))
+        (caller = parentof(x).args[1]) !== x && # and that x is not the caller
+        ((CSTParser.isidentifier(caller) && hasref(caller)) || (is_getfield(caller) && headof(caller.args[2]) === :quotenode && hasref(caller.args[2].args[1])))
 end
 
 function get_arg_position_in_call(sig::EXPR, arg)
@@ -260,10 +288,10 @@ function get_arg_type_at_position(method, argi, types)
     if method isa EXPR
         sig = CSTParser.get_sig(method)
         if sig !== nothing &&
-            sig.args !== nothing && argi <= length(sig.args) &&
-            hasbinding(sig.args[argi]) &&
-            (argb = bindingof(sig.args[argi]); argb isa Binding && argb.type !== nothing) &&
-            !(argb.type in types)
+           sig.args !== nothing && argi <= length(sig.args) &&
+           hasbinding(sig.args[argi]) &&
+           (argb = bindingof(sig.args[argi]); argb isa Binding && argb.type !== nothing) &&
+           !(argb.type in types)
             push!(types, argb.type)
             return
         end
@@ -295,7 +323,7 @@ function infer_eltype(x::EXPR)
     elseif headof(x) === :ref && hasref(x.args[1])
         r = refof(x.args[1])
         if r isa SymbolServer.DataTypeStore ||
-            r isa Binding && CoreTypes.isdatatype(r.type)
+           r isa Binding && CoreTypes.isdatatype(r.type)
             r
         end
     elseif headof(x) === :STRING
