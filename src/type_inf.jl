@@ -79,18 +79,6 @@ function infer_type_assignment_rhs(binding, state, scope)
                                 settype!(binding, return_type_ref)
                             end
                         end
-                        # Handle SymbolServer function with return type information
-                    elseif func_ref isa SymbolServer.FunctionStore
-                        if !isempty(func_ref.methods)
-                            first_method = first(func_ref.methods)
-                            if hasfield(typeof(first_method), :rt) && first_method.rt !== nothing
-                                if first_method.rt isa SymbolServer.FakeTypeName
-                                    settype!(binding, maybe_lookup(first_method.rt.name, state))
-                                else
-                                    settype!(binding, first_method.rt)
-                                end
-                            end
-                        end
                     end
                 end
             end
