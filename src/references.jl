@@ -69,6 +69,9 @@ function resolve_ref(x::EXPR, scope::Scope, state::State)::Bool
     mn === nothing && return true
 
     if scopehasbinding(scope, mn)
+        if x.parent.head === :public
+            scope.names[mn].is_public = true
+        end
         setref!(x, scope.names[mn])
         resolved = true
     elseif scope.modules isa Dict && length(scope.modules) > 0
@@ -115,16 +118,29 @@ end
 
 function resolve_ref_from_module(x::EXPR, scope::Scope, state::State)::Bool
     hasref(x) && return true
-    resolved = false
 
     mn = nameof_expr_to_resolve(x)
     mn === nothing && return true
 
+    # 1) If the scope is a module, allow resolving the module name itself
+    if CSTParser.defines_module(scope.expr)
+        n = CSTParser.get_name(scope.expr)
+        if CSTParser.isidentifier(n) && mn == CSTParser.valof(n)
+            b = bindingof(scope.expr)  # module’s binding
+            if b isa Binding
+                setref!(x, b)
+                return true
+            end
+        end
+    end
+
+    # 2) Resolve exported names from this module scope
     if scope_exports(scope, mn, state)
         setref!(x, scope.names[mn])
-        resolved = true
+        return true
     end
-    return resolved
+
+    return false
 end
 
 """
